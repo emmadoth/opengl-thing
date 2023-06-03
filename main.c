@@ -10,15 +10,107 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
+// keyboard event callback
 static void keycb(GLFWwindow* window, int key, [[maybe_unused]] int scancode, int action, [[maybe_unused]] int mods)
 {
     if((key == GLFW_KEY_ESCAPE || key == GLFW_KEY_Q) && action == GLFW_PRESS)
         glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
-/*[[maybe_unused]] typedef struct {
-    float x, y, z;
-} vec3;*/
+// maps a file into memory
+void mmap_file(char path[], const GLchar** content, off_t* contentl)
+{
+    int fd = open(path, O_RDONLY);
+    if(fd == -1)
+    {
+        perror("open");
+        *content = NULL;
+        return;
+    }
+
+    *contentl = lseek(fd, 0, SEEK_END);
+    if(*contentl == (off_t)-1)
+    {
+        perror("lseek");
+        close(fd);
+        *content = NULL;
+        return;
+    }
+
+    *content = mmap(NULL, (size_t)(*contentl), PROT_READ, MAP_PRIVATE, fd, 0);
+    if(*content == MAP_FAILED)
+    {
+        perror("mmap");
+        close(fd);
+        *content = NULL;
+        return;
+    }
+
+    close(fd);
+}
+
+// creates and compiles a shader from a string
+GLuint make_shader(GLuint type, const GLchar** ssrc)
+{
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, ssrc, NULL);
+    glCompileShader(shader);
+
+    GLint status;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+    if(status == GL_FALSE)
+    {
+        GLint len = 0;
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &len);
+
+        GLchar* log = malloc(sizeof(GLchar) * (size_t)len);
+        glGetShaderInfoLog(shader, len, &len, log);
+
+        printf("%s\n", log);
+        free(log);
+
+    }
+
+    return shader;
+}
+
+// creates an opengl shader program with a fragment shader and a vertex shader
+GLuint make_program(GLuint fs, GLuint vs)
+{
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, fs);
+    glAttachShader(prog, vs);
+    glLinkProgram(prog);
+
+    GLint status;
+    glGetProgramiv(prog, GL_LINK_STATUS, &status);
+    if(status == GL_FALSE)
+    {
+        GLint len = 0;
+        glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &len);
+
+        GLchar* log = malloc(sizeof(GLchar) * (size_t)len);
+        glGetProgramInfoLog(prog, len, &len, log);
+
+        printf("%s\n", log);
+        free(log);
+
+        return 0;
+    }
+
+    return prog;
+}
+
+GLint find_uniform(GLuint prog, char uni[])
+{
+    const GLint pos = glGetUniformLocation(prog, uni);
+    if(pos == GL_INVALID_VALUE || pos == GL_INVALID_OPERATION)
+    {
+        printf("glGetUniformLocation: %s\n", pos == GL_INVALID_VALUE ? "GL_INVALID_VALUE" : "GL_INVALID_OPERATION");
+        return 0;
+    }
+    return pos;
+}
 
 int main(void)
 {
@@ -66,143 +158,64 @@ int main(void)
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, NULL);
 
-    int vsrcf = open("main.vert", O_RDONLY);
-    if(vsrcf == -1)
-    {
-        perror("open");
+    // load vertex shader source
+    const GLchar* vsrc;
+    off_t vsrcl;
+    mmap_file("main.vert", &vsrc, &vsrcl);
+    if(vsrc == NULL)
         goto end;
-    }
-    off_t vsrcl = lseek(vsrcf, 0, SEEK_END);
-    if(vsrcl == (off_t)-1)
-    {
-        close(vsrcf);
-        perror("lseek");
-        goto end;
-    }
-    const GLchar* vsrc  = mmap(NULL, (size_t)vsrcl, PROT_READ, MAP_PRIVATE, vsrcf, 0);
-    if(vsrc == MAP_FAILED) {
-        close(vsrcf);
-        perror("mmap");
-        goto end;
-    }
-    // use vsrc here
-
+    
     printf("%s\n", vsrc);
 
-    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vs, 1, &vsrc, NULL);
-    glCompileShader(vs);
-    GLint status = 0;
-    glGetShaderiv(vs, GL_COMPILE_STATUS, &status);
-    if(status == GL_FALSE)
-    {
-        GLint len = 0;
-        glGetShaderiv(vs, GL_INFO_LOG_LENGTH, &len);
-
-        GLchar* log = malloc(sizeof(GLchar) * (size_t)len);
-        glGetShaderInfoLog(vs, len, &len, log);
-
-        printf("%s\n", log);
-        free(log);
+    // create and compile vertex shader from source
+    GLuint vs = make_shader(GL_VERTEX_SHADER, &vsrc);
+    if(vs == 0)
         goto end;
-    }
 
-    // dont care about close failing because retrying is not advised and failure is not fatal
-    close(vsrcf);
+    // unload vertex shader source
     if(munmap((void*)vsrc, (size_t)vsrcl) == -1)
     {
         perror("munmap");
         goto end;
     }
 
-    int fsrcf = open("main.frag", O_RDONLY);
-    if(fsrcf == -1)
-    {
-        perror("open");
+    // load fragment shader source
+    const GLchar* fsrc;
+    off_t fsrcl;
+    mmap_file("main.frag", &fsrc, &fsrcl);
+    if(vsrc == NULL)
         goto end;
-    }
-    off_t fsrcl = lseek(fsrcf, 0, SEEK_END);
-    if(fsrcl == (off_t)-1)
-    {
-        close(fsrcf);
-        perror("lseek");
-        goto end;
-    }
-    const GLchar* fsrc  = mmap(NULL, (size_t)fsrcl, PROT_READ, MAP_PRIVATE, vsrcf, 0);
-    if(fsrc == MAP_FAILED) {
-        close(fsrcf);
-        perror("mmap");
-        goto end;
-    }
-    // use fsrc here
 
     printf("%s\n", fsrc);
 
-    GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fs, 1, &fsrc, NULL);
-    glCompileShader(fs);
-    glGetShaderiv(fs, GL_COMPILE_STATUS, &status);
-    if(status == GL_FALSE)
-    {
-        GLint len = 0;
-        glGetShaderiv(fs, GL_INFO_LOG_LENGTH, &len);
-
-        GLchar* log = malloc(sizeof(GLchar) * (size_t)len);
-        glGetShaderInfoLog(fs, len, &len, log);
-
-        printf("%s\n", log);
-        free(log);
+    // create and compile fragment shader from source
+    GLuint fs = make_shader(GL_FRAGMENT_SHADER, &fsrc);
+    if(vs == 0)
         goto end;
-    }
 
-
-    // dont care about close failing because retrying is not advised and failure is not fatal
-    close(fsrcf);
+    // unload fragment shader source
     if(munmap((void*)fsrc, (size_t)fsrcl) == -1)
     {
         perror("munmap");
         goto end;
     }
 
-    GLuint sp = glCreateProgram();
-    glAttachShader(sp, fs);
-    glAttachShader(sp, vs);
-    glLinkProgram(sp);
-    glGetProgramiv(sp, GL_LINK_STATUS, &status);
-    if(status == GL_FALSE)
-    {
-        GLint len = 0;
-        glGetProgramiv(fs, GL_INFO_LOG_LENGTH, &len);
-
-        GLchar* log = malloc(sizeof(GLchar) * (size_t)len);
-        glGetProgramInfoLog(fs, len, &len, log);
-
-        printf("%s\n", log);
-        free(log);
+    // make shader program
+    GLuint sp = make_program(fs, vs);
+    if(sp == 0)
         goto end;
-    }
 
 
-    const GLint u_time_pos = glGetUniformLocation(sp, "u_time");
-    if(u_time_pos == GL_INVALID_VALUE || u_time_pos == GL_INVALID_OPERATION)
-    {
-        printf("glGetUniformLocation: %s\n", u_time_pos == GL_INVALID_VALUE ? "GL_INVALID_VALUE" : "GL_INVALID_OPERATION");
-        goto end;
-    }
+    const GLint u_time_pos       = find_uniform(sp, "u_time"      );
+    const GLint u_resolution_pos = find_uniform(sp, "u_resolution");
 
-    const GLint u_res_pos = glGetUniformLocation(sp, "u_resolution");
-    if(u_res_pos == GL_INVALID_VALUE || u_time_pos == GL_INVALID_OPERATION)
-    {
-        printf("glGetUniformLocation: %s\n", u_res_pos == GL_INVALID_VALUE ? "GL_INVALID_VALUE" : "GL_INVALID_OPERATION");
-        goto end;
-    }
-
+    int w, h;
+    double t1, t2, ft, fd;
 
     while(!glfwWindowShouldClose(window))
     {
-        double t1 = glfwGetTime();
+        t1 = glfwGetTime();
 
-        int w, h;
         glfwGetFramebufferSize(window, &w, &h);
         glViewport(0, 0, w, h);
 
@@ -212,23 +225,24 @@ int main(void)
         glUseProgram(sp);
         glBindVertexArray(vao);
 
-        glUniform1f(u_time_pos, (GLfloat)glfwGetTime());
-        glUniform2f(u_res_pos , (GLfloat)w, (GLfloat)h);
+        // set uniform values
+        glUniform1f(u_time_pos      , (GLfloat)glfwGetTime());
+        glUniform2f(u_resolution_pos, (GLfloat)w, (GLfloat)h);
 
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
         glfwPollEvents();
 
         glfwSwapBuffers(window);
-        double t2 = glfwGetTime();
+        t2 = glfwGetTime();
 
         // fps limiter
         // t1 = time before drawing
         // t2 = time affter drawing
         // ft = frame target in ms
         // fd = frame delta in ms
-        double ft = (t2 - t1) * 1000.0;
-        double fd = (1000.0 / 60.0) - ft;
+        ft = (t2 - t1) * 1000.0;
+        fd = (1000.0 / 60.0) - ft;
         printf("%.4fs %.0ffps %.0fms %.0fms\n", glfwGetTime(), 1000.0 / (ft + fd), ft, fd);
         if(fd > 0)
         {
