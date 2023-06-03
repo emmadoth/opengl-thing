@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
+double fps_target = 60;
+
 // keyboard event callback
 static void keycb(GLFWwindow* window, int key, [[maybe_unused]] int scancode, int action, [[maybe_unused]] int mods)
 {
@@ -242,7 +244,7 @@ int main(void)
         // ft = frame target in ms
         // fd = frame delta in ms
         ft = (t2 - t1) * 1000.0;
-        fd = (1000.0 / 60.0) - ft;
+        fd = (1000.0 / fps_target) - ft;
         printf("%.4fs %.0ffps %.0fms %.0fms\n", glfwGetTime(), 1000.0 / (ft + fd), ft, fd);
         if(fd > 0)
         {
